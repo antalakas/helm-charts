@@ -1,4 +1,5 @@
 image:
+  aws_repository: 427570677836.dkr.ecr.us-east-1.amazonaws.com/efk-geoip
   repository: gcr.io/fluentd-elasticsearch/fluentd
 ## Specify an imagePullPolicy (Required)
 ## It's recommended to change this to 'Always' if the image tag is 'latest'
@@ -127,7 +128,11 @@ affinity: {}
 
 nodeSelector: {}
 
-service: {}
+service:
+  type: ClusterIP
+  ports:
+    - name: "fluentd"
+      port: 9880
   # type: ClusterIP
   # ports:
   #   - name: "monitor-agent"
@@ -275,6 +280,12 @@ configMaps:
       </parse>
     </source>
 
+    <source>
+      @type http
+      port 9880
+      bind 0.0.0.0
+    </source>
+
     # Detect exceptions in the log output and forward them as one log entry.
     <match raw.kubernetes.**>
       @id raw.kubernetes
@@ -286,6 +297,39 @@ configMaps:
       max_bytes 500000
       max_lines 1000
     </match>
+
+    <filter test.geoip>
+      @type    geoip
+
+      geoip_lookup_keys  host
+
+      # In Dockerfile we download the file but eventually the output is better
+      # using the built-in version
+      # geoip2_database   "/home/fluent/GeoLite2-City.mmdb"
+
+      <record>
+        # # lat lon as string
+        # # ex. "37.4192008972168,-122.05740356445312"
+        location_string      ${location.latitude["host"]},${location.longitude["host"]}
+
+        # # GeoJSON (lat lon as array) is useful for Kibana's bettermap.
+        # # ex. [-122.05740356445312, 37.4192008972168]
+        location       '[${location.longitude["host"]},${location.latitude["host"]}]'
+
+        city            ${city.names.en["host"]}
+        lat             ${location.latitude["host"]}
+        lon             ${location.longitude["host"]}
+        country         ${country.iso_code["host"]}
+        country_name    ${country.names.en["host"]}
+        postal_code     ${postal.code["host"]}
+        region_code     ${subdivisions.0.iso_code["host"]}
+        region_name     ${subdivisions.0.names.en["host"]}
+      </record>
+
+      # Using this leads to the plugin not working properly
+      # To avoid get stacktrace error with `[null, null]` array for elasticsearch.
+      # skip_adding_null_record  true
+    </filter>
 
     # Concatenate multi-line logs
     <filter **>
@@ -319,6 +363,74 @@ configMaps:
         </pattern>
       </parse>
     </filter>
+
+  # tiledb.input.conf: |-
+    # Example
+    # curl --header "Content-Type: application/json" --request POST --data '{"host":"66.102.9.80"}' http://localhost:9880/test.geoip
+    # <source>
+    #   @type http
+    #   bind 0.0.0.0
+    #   port 9880
+    #   body_size_limit 32MB
+    #   keepalive_timeout 10
+    #   # backlog 0
+    #   add_http_headers false
+    #   <parse>
+    #     @type json
+    #   </parse>
+    # </source>
+
+    # <source>
+    #   @type http
+    #   port 9880
+    #   bind 0.0.0.0
+    # </source>
+
+    # # Example
+    # # echo '{"host":"66.102.9.80","message":"test"}' | fluent-cat test.geoip
+    # <source>
+    #   @type forward
+    # </source>
+
+    # <filter test.geoip>
+    #   @type    geoip
+
+    #   geoip_lookup_keys  host
+
+    #   # In Dockerfile we download the file but eventually the output is better
+    #   # using the built-in version
+    #   # geoip2_database   "/home/fluent/GeoLite2-City.mmdb"
+
+    #   <record>
+    #       city  ${city.names.en["host"]}
+    #       lat   ${location.latitude["host"]}
+    #       lon   ${location.longitude["host"]}
+    #     # # lat lon as string
+    #     # # ex. "37.4192008972168,-122.05740356445312"
+    #     # location_string      ${location.latitude["host"]},${location.longitude["host"]}
+
+    #     # # GeoJSON (lat lon as array) is useful for Kibana's bettermap.
+    #     # # ex. [-122.05740356445312, 37.4192008972168]
+    #     # location_array       '[${location.longitude["host"]},${location.latitude["host"]}]'
+
+    #     # city            ${city.names.en["host"]}
+    #     # lat             ${location.latitude["host"]}
+    #     # lon             ${location.longitude["host"]}
+    #     # country         ${country.iso_code["host"]}
+    #     # country_name    ${country.names.en["host"]}
+    #     # postal_code     ${postal.code["host"]}
+    #     # region_code     ${subdivisions.0.iso_code["host"]}
+    #     # region_name     ${subdivisions.0.names.en["host"]}
+    #   </record>
+
+    #   # Using this leads to the plugin not working properly
+    #   # To avoid get stacktrace error with `[null, null]` array for elasticsearch.
+    #   # skip_adding_null_record  true
+    # </filter>
+
+    # <match test.**>
+    #   @type stdout
+    # </match>
 
   system.input.conf: |-
     # Example:
